@@ -1,0 +1,5 @@
+{
+  "name": "claude-mod-zentrale",
+  "owner": { "name": "CHief-Wiggum1203" },
+  "plugins": [{ "name": "mod-zentrale", "source": "./" }]
+}
