@@ -47,7 +47,8 @@ function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?:
     return { value: e.value }
   })
   const market = (p: Fake) => p.id.split('@')[1] ?? ''
-  on('fs.read', (_, e) => {
+  on('fs.read', (_, raw) => {
+    const e = { path: raw.path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '') }
     const catalog = /^\/mk\/([^/]+)\/\.claude-plugin\/marketplace\.json$/.exec(e.path)
     if (catalog !== null) {
       const entries = plugins
@@ -165,7 +166,8 @@ test('/mods reads the list and opens the pane', async ($, on) => {
   const answer = await $.command.run({ command: 'mods', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })
   expect(answer.text).toBe('Mod-Zentrale geöffnet.')
   expect(opened).toBe('Mod-Zentrale')
-  expect(cli.ran).toEqual(['list --json'])
+  // Once when the session starts, once for /mods.
+  expect(cli.ran.filter(c => c === 'list --json')).toEqual(['list --json', 'list --json'])
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /eingeschaltet$/ }))?.text).toBe('3 von 4 eingeschaltet')
   await ui.unmount()
@@ -274,5 +276,24 @@ test('a refused setting shows why', async ($, on) => {
   await ui.press({ key: 'cfg-git-pull-guard.autoPull' })
   expect((await ui.find({ type: 'Text', text: /organization/ }))?.text).toBe('Automatisch pullen: set by your organization')
   expect((await ui.find({ key: 'cfg-git-pull-guard.autoPull' }))?.text).toBe('An')
+  await ui.unmount()
+})
+
+test('a session starts it as a widget with the overview, nothing to click', async ($, on) => {
+  fakeCli(on, PLUGINS())
+  const opens: unknown[] = []
+  on('command.register', () => ({ value: { command: 'mods' } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('ui.open', (_, e) => {
+    opens.push(e)
+    return { value: { isPlaced: true } }
+  })
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  expect(opens.length).toBe(1)
+  expect(opens[0]).toEqual(expect.objectContaining({ id: 'mod-zentrale', placement: 'widget' }))
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop', props: { ...PANE.props, placement: 'widget' } })
+  expect((await ui.find({ type: 'Text', text: /^Mods/ }))?.text).toBe('Mods 2/3 an · Plugins 1/1 an')
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
   await ui.unmount()
 })

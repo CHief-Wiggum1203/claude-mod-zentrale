@@ -2,6 +2,7 @@
 
 Ein Claude-Code-Mod: ein Panel **„Mod-Zentrale“**, in dem du alle installierten Mods und Plugins siehst, per Knopf ein- und ausschaltest, aktualisierst und einstellst.
 
+- in der Desktop-App startet sie als kleines **Widget** mit der Übersicht (Mods/Plugins an, verfügbare Updates, Änderungen ab der nächsten Session), ein Klick vergrößert sie
 - `/mods` öffnet das Panel und liest die aktuelle Liste
 - zuerst die **Mods** (Plugins mit eigenem Hooks-Modul), dann die **weiteren Plugins**
 - pro Eintrag: an (●) oder aus (○), Name, Version, Marketplace und Beschreibung

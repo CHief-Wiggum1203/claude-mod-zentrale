@@ -236,6 +236,10 @@ export const register: Register = on => {
     await update($, updated, () => [])
     // A search cut off by a reload never finished.
     await update($, isChecking, () => false)
+    // On the desktop app a small widget with the overview; /mods opens it full.
+    await refresh($)
+    await $.ui.open({ id: PANE, title: TITLE, placement: 'widget' })
+    void checkUpdates($)
 
     return next(e)
   })
@@ -374,6 +378,48 @@ export const register: Register = on => {
 
     const mods = list.filter(p => p.isMod)
     const others = list.filter(p => !p.isMod)
+    const enabledIn = (group: Installed[]) => group.filter(p => p.isEnabled).length
+
+    // The widget: the overview at a glance, nothing to click.
+    if (e.props.placement === 'widget') {
+      const pending = new Set([...changed, ...done]).size
+
+      return (
+        <Box flexDirection="column">
+          {list.length === 0 && problem === null && <Text dimColor>Liste wird geladen …</Text>}
+          {list.length > 0 && (
+            <Text wrap="truncate-end">
+              <Text bold>Mods</Text>
+              <Text dimColor>
+                {' '}
+                {enabledIn(mods)}/{mods.length} an ·{' '}
+              </Text>
+              <Text bold>Plugins</Text>
+              <Text dimColor>
+                {' '}
+                {enabledIn(others)}/{others.length} an
+              </Text>
+            </Text>
+          )}
+          {offered.length > 0 && (
+            <Text color="claude" wrap="truncate-end">
+              ↑ {offered.length === 1 ? '1 Update verfügbar' : `${offered.length} Updates verfügbar`}
+            </Text>
+          )}
+          {offered.length === 0 && checking && <Text dimColor>Suche Updates …</Text>}
+          {pending > 0 && (
+            <Text color="warning" wrap="truncate-end">
+              {pending === 1 ? '1 Änderung gilt' : `${pending} Änderungen gelten`} ab der nächsten Session
+            </Text>
+          )}
+          {problem !== null && (
+            <Text color="error" wrap="truncate-end">
+              {problem}
+            </Text>
+          )}
+        </Box>
+      )
+    }
 
     return (
       <Box flexDirection="column" gap={1}>
