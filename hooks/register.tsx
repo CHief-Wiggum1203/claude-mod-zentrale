@@ -95,7 +95,12 @@ async function refresh($: EngineInterface) {
     return
   }
   const list: Installed[] = []
+  // A plugin from claude.ai that one of this machine's of the same name shadows never loads.
+  const isShadowed = (row: Record<string, unknown>) =>
+    Array.isArray(row.noteDetails) &&
+    row.noteDetails.some(note => (note as Record<string, unknown> | null)?.type === 'synced-plugin-shadowed')
   for (const row of rows) {
+    if (isShadowed(row)) continue
     const id = String(row.id ?? '')
     const [name = id, marketplace = ''] = id.split('@')
     const facts = typeof row.installPath === 'string' ? await folderFacts($, row.installPath) : { description: '', isMod: false }

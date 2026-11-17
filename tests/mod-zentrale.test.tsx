@@ -22,6 +22,8 @@ type Fake = {
   description?: string
   isMod?: boolean
   version?: string
+  /** A claude.ai copy that a plugin of the same name on this machine shadows. */
+  isShadowed?: boolean
   /** What its marketplace offers, named in the catalog entry or in the plugin's manifest there. */
   offered?: { version: string; in: 'entry' | 'manifest' }
 }
@@ -73,7 +75,14 @@ function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?:
     if (args[0] === 'list') {
       return ok(
         JSON.stringify(
-          plugins.map(p => ({ id: p.id, version: p.version ?? '1.0.0', scope: p.scope ?? 'user', enabled: p.enabled, installPath: `/cache/${p.id}/1.0.0` })),
+          plugins.map(p => ({
+            id: p.id,
+            version: p.version ?? '1.0.0',
+            scope: p.scope ?? 'user',
+            enabled: p.enabled,
+            installPath: `/cache/${p.id}/1.0.0`,
+            ...(p.isShadowed === true ? { noteDetails: [{ type: 'synced-plugin-shadowed', related: 'x' }] } : {}),
+          })),
         ),
       )
     }
@@ -305,5 +314,15 @@ test('a plugin synced from claude.ai switches without a scope the CLI does not k
   await ui.press({ key: 'toggle-legal@synced' })
   expect(cli.ran).toContain('disable legal@synced')
   expect((await ui.find({ key: 'toggle-legal@synced' }))?.text).toBe('Einschalten')
+  await ui.unmount()
+})
+
+test('a synced copy shadowed by a plugin of the same name on this machine is left out', async ($, on) => {
+  fakeCli(on, [...PLUGINS(), { id: 'superpowers@synced', enabled: true, scope: 'synced', version: 'unknown', isShadowed: true }])
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh' })
+  expect(await ui.find({ key: 'toggle-superpowers@synced' })).toBeUndefined()
+  expect(await ui.find({ key: 'toggle-superpowers@claude-plugins-official' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /eingeschaltet$/ }))?.text).toBe('3 von 4 eingeschaltet')
   await ui.unmount()
 })
