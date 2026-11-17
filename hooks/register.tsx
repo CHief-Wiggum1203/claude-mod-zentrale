@@ -159,8 +159,15 @@ async function checkUpdates($: EngineInterface) {
   await update($, isChecking, () => false)
 }
 
+/**
+ * The `--scope` to pass for a plugin. A plugin synced from claude.ai lists scope
+ * `synced`, which the CLI does not take: left out, it switches it in user settings.
+ */
+const scopeArgs = (plugin: Installed) =>
+  ['user', 'project', 'local'].includes(plugin.scope) ? ['--scope', plugin.scope] : []
+
 async function updateOne($: EngineInterface, plugin: Installed) {
-  const done = await cli($, ['update', plugin.id, '--scope', plugin.scope], 120_000)
+  const done = await cli($, ['update', plugin.id, ...scopeArgs(plugin)], 120_000)
   if (!done.isOk) {
     await update($, error, () => `${plugin.name}: ${firstLine(done.out)}`)
     return false
@@ -194,7 +201,7 @@ async function toggle($: EngineInterface, plugin: Installed) {
   if ((await read($, busy)) !== null) return
   await update($, busy, () => plugin.id)
   await update($, error, () => null)
-  const done = await cli($, [plugin.isEnabled ? 'disable' : 'enable', plugin.id, '--scope', plugin.scope])
+  const done = await cli($, [plugin.isEnabled ? 'disable' : 'enable', plugin.id, ...scopeArgs(plugin)])
   if (done.isOk) {
     await update($, switched, ids => (ids.includes(plugin.id) ? ids.filter(id => id !== plugin.id) : [...ids, plugin.id]))
     $.ui.toast(`${plugin.name} ${plugin.isEnabled ? 'ausgeschaltet' : 'eingeschaltet'}`)

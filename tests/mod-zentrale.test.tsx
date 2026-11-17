@@ -297,3 +297,13 @@ test('a session starts it as a widget with the overview, nothing to click', asyn
   expect(await ui.find({ type: 'Button' })).toBeUndefined()
   await ui.unmount()
 })
+
+test('a plugin synced from claude.ai switches without a scope the CLI does not know', async ($, on) => {
+  const cli = fakeCli(on, [...PLUGINS(), { id: 'legal@synced', enabled: true, scope: 'synced' }])
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'toggle-legal@synced' })
+  expect(cli.ran).toContain('disable legal@synced')
+  expect((await ui.find({ key: 'toggle-legal@synced' }))?.text).toBe('Einschalten')
+  await ui.unmount()
+})
