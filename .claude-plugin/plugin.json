@@ -1,7 +1,7 @@
 {
   "name": "mod-zentrale",
-  "version": "0.1.0",
-  "description": "Panel mit allen installierten Mods und Plugins, die sich dort ein- und ausschalten lassen",
+  "version": "0.2.0",
+  "description": "Panel mit allen installierten Mods und Plugins: ein- und ausschalten, aktualisieren und einstellen",
   "license": "MIT",
   "types": "./types/index.d.ts"
 }

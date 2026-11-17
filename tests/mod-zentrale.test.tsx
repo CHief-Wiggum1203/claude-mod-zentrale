@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import type { On } from 'claude-code'
+import type { ConfigRow, On } from 'claude-code'
 
 const PANE = {
   plugin: 'mod-zentrale',
@@ -15,10 +15,19 @@ const PANE = {
   },
 } as const
 
-type Fake = { id: string; enabled: boolean; scope?: string; description?: string; isMod?: boolean }
+type Fake = {
+  id: string
+  enabled: boolean
+  scope?: string
+  description?: string
+  isMod?: boolean
+  version?: string
+  /** What its marketplace offers, named in the catalog entry or in the plugin's manifest there. */
+  offered?: { version: string; in: 'entry' | 'manifest' }
+}
 
 /** A Claude Code CLI holding these plugins, switching them as asked; returns the commands it ran. */
-function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean } = {}) {
+function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?: ConfigRow[]; denyConfig?: string } = {}) {
   const ran: string[] = []
   const toasts: string[] = []
   on('env.get', () => ({ value: '/app/claude' }))
@@ -26,7 +35,29 @@ function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean } = {}) {
     toasts.push(e.text)
     return { value: undefined }
   })
+  const config = opts.config ?? []
+  const writes: string[] = []
+  on('config.list', () => ({ value: config }))
+  on('config.set', (_, e) => {
+    if (opts.denyConfig !== undefined) return { deny: opts.denyConfig }
+    writes.push(`${e.key}=${String(e.value)}`)
+    const index = config.findIndex(row => row.key === e.key)
+    const row = config[index]
+    if (row !== undefined) config[index] = { ...row, value: e.value }
+    return { value: e.value }
+  })
+  const market = (p: Fake) => p.id.split('@')[1] ?? ''
   on('fs.read', (_, e) => {
+    const catalog = /^\/mk\/([^/]+)\/\.claude-plugin\/marketplace\.json$/.exec(e.path)
+    if (catalog !== null) {
+      const entries = plugins
+        .filter(p => market(p) === catalog[1] && p.offered !== undefined)
+        .map(p => (p.offered?.in === 'entry' ? { name: p.id.split('@')[0], version: p.offered.version, source: { source: 'url' } } : { name: p.id.split('@')[0], source: './' }))
+      return { value: JSON.stringify({ name: catalog[1], plugins: entries }) }
+    }
+    const shipped = /^\/mk\/([^/]+)\/\.claude-plugin\/plugin\.json$/.exec(e.path)
+    const offeredHere = plugins.find(p => shipped !== null && market(p) === shipped[1] && p.offered?.in === 'manifest')
+    if (offeredHere !== undefined) return { value: JSON.stringify({ name: offeredHere.id.split('@')[0], version: offeredHere.offered?.version }) }
     const plugin = plugins.find(p => e.path.startsWith(`/cache/${p.id}/`))
     if (plugin !== undefined && e.path.endsWith('plugin.json') && plugin.description !== undefined)
       return { value: JSON.stringify({ name: plugin.id.split('@')[0], description: plugin.description }) }
@@ -41,11 +72,19 @@ function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean } = {}) {
     if (args[0] === 'list') {
       return ok(
         JSON.stringify(
-          plugins.map(p => ({ id: p.id, version: '1.0.0', scope: p.scope ?? 'user', enabled: p.enabled, installPath: `/cache/${p.id}/1.0.0` })),
+          plugins.map(p => ({ id: p.id, version: p.version ?? '1.0.0', scope: p.scope ?? 'user', enabled: p.enabled, installPath: `/cache/${p.id}/1.0.0` })),
         ),
       )
     }
+    if (args.join(' ') === 'marketplace update') return ok('')
+    if (args.join(' ') === 'marketplace list --json') {
+      return ok(JSON.stringify([...new Set(plugins.map(market))].map(name => ({ name, installLocation: `/mk/${name}` }))))
+    }
     const plugin = plugins.find(p => p.id === args[1])
+    if (plugin !== undefined && args[0] === 'update' && plugin.offered !== undefined) {
+      plugin.version = plugin.offered.version
+      return ok('')
+    }
     if (args[0] === 'enable' && opts.failEnable === true) {
       return { value: { exitCode: 1, stdout: '', stderr: 'Plugin is blocked by policy\n', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -55,7 +94,7 @@ function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean } = {}) {
     }
     return { value: { exitCode: 1, stdout: '', stderr: `unexpected ${args.join(' ')}`, isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  return { ran, toasts }
+  return { ran, toasts, writes }
 }
 
 const PLUGINS = (): Fake[] => [
@@ -129,5 +168,111 @@ test('/mods reads the list and opens the pane', async ($, on) => {
   expect(cli.ran).toEqual(['list --json'])
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await ui.find({ type: 'Text', text: /eingeschaltet$/ }))?.text).toBe('3 von 4 eingeschaltet')
+  await ui.unmount()
+})
+
+test('newer versions on offer show per plugin, and one press brings them in', async ($, on) => {
+  const plugins: Fake[] = [
+    { id: 'agent-monitor@claude-agent-monitor', enabled: true, isMod: true, version: '0.4.0', offered: { version: '0.10.0', in: 'manifest' } },
+    { id: 'swift-lsp@claude-plugins-official', enabled: true, version: '1.0.0', offered: { version: '1.1.0', in: 'entry' } },
+    // Same version, and an older one: nothing to offer.
+    { id: 'git-pull-guard@claude-git-pull-guard', enabled: true, isMod: true, version: '0.3.0', offered: { version: '0.3.0', in: 'manifest' } },
+    { id: 'superpowers@claude-plugins-official', enabled: true, version: '5.1.0', offered: { version: '5.0.0', in: 'entry' } },
+  ]
+  const cli = fakeCli(on, plugins)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'refresh' })
+    await ui.press({ key: 'check-updates' })
+    expect((await ui.find({ type: 'Text', text: /Updates verfügbar/ }))?.text).toBe('2 Updates verfügbar')
+    expect((await ui.findAll({ type: 'Text', text: /verfügbar$/ })).map(t => t.text)).toEqual([
+      '2 Updates verfügbar',
+      '↑ 0.10.0 verfügbar',
+      '↑ 1.1.0 verfügbar',
+    ])
+    expect(await ui.find({ key: 'update-git-pull-guard@claude-git-pull-guard' })).toBeUndefined()
+    expect(await ui.find({ key: 'update-superpowers@claude-plugins-official' })).toBeUndefined()
+    await ui.unmount()
+  }
+  expect(cli.ran).toContain('marketplace update')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'update-all' })
+  expect(cli.ran).toContain('update agent-monitor@claude-agent-monitor --scope user')
+  expect(cli.ran).toContain('update swift-lsp@claude-plugins-official --scope user')
+  expect(cli.toasts).toEqual(['2 Plugins aktualisiert'])
+  expect(await ui.find({ type: 'Text', text: /Updates? verfügbar/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /agent-monitor/ }))?.text).toBe('agent-monitor 0.10.0 · claude-agent-monitor')
+  expect((await ui.findAll({ type: 'Text', text: /aktualisiert · gilt/ })).length).toBe(2)
+  await ui.unmount()
+})
+
+const ROW = (key: string, kind: ConfigRow['kind'], value: ConfigRow['value'], extra: Partial<ConfigRow> = {}): ConfigRow => ({
+  key,
+  label: key.split('.')[1] ?? key,
+  kind,
+  value,
+  provider: { plugin: key.split('.')[0] ?? '', tier: 'user' },
+  isLocked: false,
+  ...extra,
+})
+
+test('a mod with options opens its settings in the pane, and a change is written', async ($, on) => {
+  const cli = fakeCli(on, PLUGINS(), {
+    config: [
+      ROW('git-pull-guard.autoPull', 'boolean', true, { label: 'Automatisch pullen', description: 'Holt neue Commits selbst' }),
+      ROW('git-pull-guard.recheckMinutes', 'number', 15, { label: 'Erneut prüfen nach (Minuten)' }),
+      ROW('git-pull-guard.ignore', 'text', '', { label: 'Ausgenommene Repos' }),
+      ROW('git-pull-guard.mode', 'choice', 'leise', { label: 'Modus', options: ['leise', 'laut'] }),
+      ROW('theme', 'choice', 'dark', { provider: { plugin: 'engine', tier: 'core' }, options: ['dark', 'light'] }),
+    ],
+  })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'refresh' })
+    // The engine's own rows are /config's, not a plugin's.
+    expect((await ui.find({ key: 'settings-git-pull-guard@claude-git-pull-guard' }))?.text).toBe('Einstellungen (4) ▸')
+    expect(await ui.find({ key: 'settings-superpowers@claude-plugins-official' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /Automatisch pullen/ })).toBeUndefined()
+    await ui.press({ key: 'settings-git-pull-guard@claude-git-pull-guard' })
+    expect((await ui.find({ type: 'Text', text: /Holt neue/ }))?.text).toBe('Holt neue Commits selbst')
+    expect((await ui.find({ key: 'cfg-git-pull-guard.autoPull' }))?.text).toBe('An')
+    await ui.press({ key: 'settings-git-pull-guard@claude-git-pull-guard' })
+    await ui.unmount()
+  }
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'settings-git-pull-guard@claude-git-pull-guard' })
+  await ui.press({ key: 'cfg-git-pull-guard.autoPull' })
+  expect((await ui.find({ key: 'cfg-git-pull-guard.autoPull' }))?.text).toBe('Aus')
+  await ui.input({ key: 'cfg-git-pull-guard.recheckMinutes', text: '30' })
+  await ui.input({ key: 'cfg-git-pull-guard.ignore', text: 'dotfiles' })
+  await ui.press({ key: 'cfg-git-pull-guard.mode-laut' })
+  expect(cli.writes).toEqual([
+    'git-pull-guard.autoPull=false',
+    'git-pull-guard.recheckMinutes=30',
+    'git-pull-guard.ignore=dotfiles',
+    'git-pull-guard.mode=laut',
+  ])
+  expect(cli.toasts).toEqual(['Automatisch pullen: aus', 'Erneut prüfen nach (Minuten): 30', 'Ausgenommene Repos: dotfiles', 'Modus: laut'])
+
+  // Not a number: nothing is written, and the pane says why.
+  await ui.input({ key: 'cfg-git-pull-guard.recheckMinutes', text: 'oft' })
+  expect((await ui.find({ type: 'Text', text: /keine Zahl/ }))?.text).toBe('Erneut prüfen nach (Minuten): „oft“ ist keine Zahl')
+  expect(cli.writes).toHaveLength(4)
+  await ui.unmount()
+})
+
+test('a refused setting shows why', async ($, on) => {
+  fakeCli(on, PLUGINS(), {
+    config: [ROW('git-pull-guard.autoPull', 'boolean', true, { label: 'Automatisch pullen' })],
+    denyConfig: 'set by your organization',
+  })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'settings-git-pull-guard@claude-git-pull-guard' })
+  await ui.press({ key: 'cfg-git-pull-guard.autoPull' })
+  expect((await ui.find({ type: 'Text', text: /organization/ }))?.text).toBe('Automatisch pullen: set by your organization')
+  expect((await ui.find({ key: 'cfg-git-pull-guard.autoPull' }))?.text).toBe('An')
   await ui.unmount()
 })
