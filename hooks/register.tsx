@@ -18,6 +18,11 @@ const isChecking = atom({ plugin: 'mod-zentrale', key: 'isChecking' } as const, 
 const updated = atom({ plugin: 'mod-zentrale', key: 'updated' } as const, [])
 const settings = atom({ plugin: 'mod-zentrale', key: 'settings' } as const, [], { shape: 'settings-1' })
 const openSettings = atom({ plugin: 'mod-zentrale', key: 'openSettings' } as const, [])
+const advisor = atom({ plugin: 'mod-zentrale', key: 'advisor' } as const, null)
+
+// The model the switch turns the advisor back on with, kept across sessions.
+const LAST_ADVISOR = 'lastAdvisorModel'
+const DEFAULT_ADVISOR = 'opus'
 
 const firstLine = (text: string) => text.trim().split('\n')[0] || 'unbekannter Fehler'
 
@@ -120,6 +125,7 @@ async function refresh($: EngineInterface) {
   // An installed version may have caught up with what was on offer.
   await update($, newer, offered => offered.filter(n => list.some(p => p.id === n.id && isLater(n.version, p.version))))
   await loadSettings($)
+  await loadAdvisor($)
 }
 
 /**
@@ -217,6 +223,49 @@ async function toggle($: EngineInterface, plugin: Installed) {
   await update($, busy, () => null)
 }
 
+/** The user settings file, where `/advisor` keeps `advisorModel`. */
+async function userSettingsPath($: EngineInterface) {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? ''
+  const dir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  return `${dir}/settings.json`
+}
+
+/** Reads whether the advisor is on, and with which model; `null` when the file is unreadable. */
+async function loadAdvisor($: EngineInterface) {
+  const json = await readJson($, await userSettingsPath($))
+  const model = typeof json?.advisorModel === 'string' && json.advisorModel !== '' ? json.advisorModel : null
+  await update($, advisor, () => (json === undefined ? null : { model }))
+}
+
+/**
+ * Switches the advisor as `/advisor` does in the user settings: off removes
+ * `advisorModel` and keeps it to come back to; on writes that model again.
+ */
+async function switchAdvisor($: EngineInterface, isOn: boolean) {
+  await update($, error, () => null)
+  const path = await userSettingsPath($)
+  // Read right before writing, so nothing changed meanwhile is lost.
+  const json = await readJson($, path)
+  if (json === undefined) {
+    await update($, error, () => 'Advisor: settings.json nicht lesbar')
+    return
+  }
+  if (isOn) {
+    const kept = await $.store.get(LAST_ADVISOR)
+    json.advisorModel = typeof kept === 'string' && kept !== '' ? kept : DEFAULT_ADVISOR
+  } else {
+    if (typeof json.advisorModel === 'string' && json.advisorModel !== '') await $.store.set(LAST_ADVISOR, json.advisorModel)
+    delete json.advisorModel
+  }
+  try {
+    await $.fs.write(path, `${JSON.stringify(json, null, 2)}\n`)
+    $.ui.toast(isOn ? `Advisor an: ${String(json.advisorModel)}` : 'Advisor aus')
+  } catch (cause) {
+    await update($, error, () => `Advisor: ${firstLine(String(cause))}`)
+  }
+  await loadAdvisor($)
+}
+
 /** Writes one setting as the `/config` menu would; the plugin reloads with it. */
 async function setSetting($: EngineInterface, setting: Setting, raw: string) {
   await update($, error, () => null)
@@ -276,6 +325,8 @@ export const register: Register = on => {
     const done = await read($, updated)
     const fields = await read($, settings)
     const opened = await read($, openSettings)
+    const advised = await read($, advisor)
+    const advisorText = advised === null ? null : `Advisor ${advised.model ?? 'aus'}`
 
     const settingRow = (setting: Setting) => (
       <Box key={setting.key} flexDirection="column" paddingLeft={4}>
@@ -418,6 +469,11 @@ export const register: Register = on => {
               ↑ {offered.length === 1 ? '1 Update verfügbar' : `${offered.length} Updates verfügbar`}
             </Text>
           )}
+          {advisorText !== null && (
+            <Text color={advised?.model == null ? 'inactive' : undefined} wrap="truncate-end">
+              {advisorText}
+            </Text>
+          )}
           {offered.length === 0 && checking && <Text dimColor>Suche Updates …</Text>}
           {pending > 0 && (
             <Text color="warning" wrap="truncate-end">
@@ -447,6 +503,20 @@ export const register: Register = on => {
             onPress={() => checkUpdates($)}
           />
         </Box>
+        {advised !== null && (
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            <Text color={advised.model === null ? 'inactive' : 'success'}>{advised.model === null ? '○' : '●'}</Text>
+            <Text bold wrap="truncate-end">
+              {advisorText}
+            </Text>
+            <Button
+              key="advisor"
+              label={advised.model === null ? 'Einschalten' : 'Ausschalten'}
+              variant={advised.model === null ? 'primary' : 'secondary'}
+              onPress={() => switchAdvisor($, advised.model === null)}
+            />
+          </Box>
+        )}
         {offered.length > 0 && (
           <Box flexDirection="row" alignItems="center" gap={1}>
             <Text color="claude">

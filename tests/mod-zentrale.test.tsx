@@ -29,7 +29,7 @@ type Fake = {
 }
 
 /** A Claude Code CLI holding these plugins, switching them as asked; returns the commands it ran. */
-function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?: ConfigRow[]; denyConfig?: string } = {}) {
+function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?: ConfigRow[]; denyConfig?: string; settings?: Record<string, unknown> } = {}) {
   const ran: string[] = []
   const toasts: string[] = []
   on('env.get', () => ({ value: '/app/claude' }))
@@ -51,6 +51,7 @@ function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?:
   const market = (p: Fake) => p.id.split('@')[1] ?? ''
   on('fs.read', (_, raw) => {
     const e = { path: raw.path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '') }
+    if (e.path === '/app/claude/settings.json' && opts.settings !== undefined) return { value: `${JSON.stringify(opts.settings, null, 2)}\n` }
     const catalog = /^\/mk\/([^/]+)\/\.claude-plugin\/marketplace\.json$/.exec(e.path)
     if (catalog !== null) {
       const entries = plugins
@@ -67,6 +68,18 @@ function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?:
     if (plugin !== undefined && e.path.endsWith('hooks.json') && plugin.isMod === true)
       return { value: JSON.stringify({ modules: ['./register.tsx'] }) }
     throw new Error('ENOENT')
+  })
+  const store = new Map<string, unknown>()
+  on('store.get', (_, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_, e) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  const saved: string[] = []
+  on('fs.write', (_, e) => {
+    saved.push(e.text)
+    if (opts.settings !== undefined) opts.settings = JSON.parse(e.text) as Record<string, unknown>
+    return { value: undefined }
   })
   on('process.run', (_, e) => {
     const args = e.argv.slice(2)
@@ -104,7 +117,7 @@ function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?:
     }
     return { value: { exitCode: 1, stdout: '', stderr: `unexpected ${args.join(' ')}`, isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  return { ran, toasts, writes }
+  return { ran, toasts, writes, saved }
 }
 
 const PLUGINS = (): Fake[] => [
@@ -324,5 +337,38 @@ test('a synced copy shadowed by a plugin of the same name on this machine is lef
   expect(await ui.find({ key: 'toggle-superpowers@synced' })).toBeUndefined()
   expect(await ui.find({ key: 'toggle-superpowers@claude-plugins-official' })).toBeDefined()
   expect((await ui.find({ type: 'Text', text: /eingeschaltet$/ }))?.text).toBe('3 von 4 eingeschaltet')
+  await ui.unmount()
+})
+
+test('the advisor switch takes advisorModel out of the user settings and brings it back', async ($, on) => {
+  const settings = { theme: 'dark', advisorModel: 'fable', tui: 'fullscreen' }
+  const cli = fakeCli(on, PLUGINS(), { settings })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh' })
+  expect((await ui.find({ type: 'Text', text: /^Advisor/ }))?.text).toBe('Advisor fable')
+  expect((await ui.find({ key: 'advisor' }))?.text).toBe('Ausschalten')
+
+  await ui.press({ key: 'advisor' })
+  expect(JSON.parse(cli.saved[0] ?? '{}')).toEqual({ theme: 'dark', tui: 'fullscreen' })
+  expect(cli.saved[0]?.endsWith('}\n')).toBe(true)
+  expect((await ui.find({ type: 'Text', text: /^Advisor/ }))?.text).toBe('Advisor aus')
+  expect((await ui.find({ key: 'advisor' }))?.text).toBe('Einschalten')
+
+  await ui.press({ key: 'advisor' })
+  expect(JSON.parse(cli.saved[1] ?? '{}')).toEqual({ theme: 'dark', tui: 'fullscreen', advisorModel: 'fable' })
+  expect((await ui.find({ type: 'Text', text: /^Advisor/ }))?.text).toBe('Advisor fable')
+  expect(cli.toasts).toEqual(['Advisor aus', 'Advisor an: fable'])
+  await ui.unmount()
+
+  const widget = await $.ui.mount({ ...PANE, surface: 'desktop', props: { ...PANE.props, placement: 'widget' } })
+  expect((await widget.find({ type: 'Text', text: /^Advisor/ }))?.text).toBe('Advisor fable')
+  await widget.unmount()
+})
+
+test('without readable user settings there is no advisor switch', async ($, on) => {
+  fakeCli(on, PLUGINS())
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh' })
+  expect(await ui.find({ key: 'advisor' })).toBeUndefined()
   await ui.unmount()
 })

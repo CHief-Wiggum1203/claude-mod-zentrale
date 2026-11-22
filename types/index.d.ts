@@ -31,6 +31,9 @@ export type Setting = {
   isLocked: boolean
 }
 
+/** The advisor as the user settings hold it: the model while on, `null` while off. */
+export type Advisor = { model: string | null }
+
 declare module 'claude-code' {
   interface PluginState {
     'mod-zentrale': {
@@ -51,6 +54,8 @@ declare module 'claude-code' {
       settings: Shaped<Setting[]>
       /** The plugins whose settings are opened in the pane. */
       openSettings: string[]
+      /** The advisor's state; `null` when the user settings could not be read. */
+      advisor: Advisor | null
     }
   }
 }
