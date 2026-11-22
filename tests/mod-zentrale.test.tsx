@@ -392,3 +392,34 @@ test('without readable user settings there is no advisor switch', async ($, on) 
   expect(await ui.find({ key: 'advisor' })).toBeUndefined()
   await ui.unmount()
 })
+
+test('each advisor call a step reports is counted beside the advisor', async ($, on) => {
+  fakeCli(on, PLUGINS(), { settings: { advisorModel: 'opus' } })
+  on('turn.step', async function* (_, e) {
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      serverToolUses: [
+        { id: 's1', name: 'advisor', input: {}, startedAt: 1, endedAt: 2 },
+        { id: 's2', name: 'web_search', input: {}, startedAt: 3, endedAt: 4 },
+      ],
+      stopReason: 'end_turn',
+      usage: null,
+    }
+  })
+  const pane = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await pane.press({ key: 'refresh' })
+  expect((await pane.find({ type: 'Text', text: /^Advisor/ }))?.text).toBe('Advisor opus')
+  await pane.unmount()
+
+  for (const index of [0, 1]) {
+    const step = $.turn.step({ turnId: 't1', index, model: 'opus', messageCount: 1 })
+    for await (const _ of step);
+  }
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop', props: { ...PANE.props, placement: 'widget' } })
+  expect((await ui.find({ type: 'Text', text: /^Advisor/ }))?.text).toBe('Advisor opus · 2× gefragt')
+  await ui.unmount()
+})

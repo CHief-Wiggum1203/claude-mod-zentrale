@@ -56,6 +56,8 @@ declare module 'claude-code' {
       openSettings: string[]
       /** The advisor's state; `null` when the user settings could not be read. */
       advisor: Advisor | null
+      /** How often the advisor was asked in this session, by any agent. */
+      advisorCalls: number
     }
   }
 }

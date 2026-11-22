@@ -19,6 +19,8 @@ const updated = atom({ plugin: 'mod-zentrale', key: 'updated' } as const, [])
 const settings = atom({ plugin: 'mod-zentrale', key: 'settings' } as const, [], { shape: 'settings-1' })
 const openSettings = atom({ plugin: 'mod-zentrale', key: 'openSettings' } as const, [])
 const advisor = atom({ plugin: 'mod-zentrale', key: 'advisor' } as const, null)
+// How often the advisor was asked in this session, by any agent.
+const advisorCalls = atom({ plugin: 'mod-zentrale', key: 'advisorCalls' } as const, 0)
 
 // The model the switch turns the advisor back on with, kept across sessions.
 const LAST_ADVISOR = 'lastAdvisorModel'
@@ -317,6 +319,15 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // The advisor runs on the API's side: no tool.call, only the step's result names it.
+  on('turn.step', async function* ($, e, next) {
+    const step = yield* next(e)
+    const asked = (step.serverToolUses ?? []).filter(use => use.name === 'advisor').length
+    if (asked > 0) await update($, advisorCalls, n => n + asked)
+
+    return step
+  })
+
   on('command.run', { command: 'mods' }, async $ => {
     await refresh($)
     await $.ui.open({ id: PANE, title: TITLE })
@@ -338,7 +349,9 @@ export const register: Register = on => {
     const fields = await read($, settings)
     const opened = await read($, openSettings)
     const advised = await read($, advisor)
-    const advisorText = advised === null ? null : `Advisor ${advised.model ?? 'aus'}`
+    const asked = await read($, advisorCalls)
+    const advisorText =
+      advised === null ? null : `Advisor ${advised.model ?? 'aus'}${asked > 0 ? ` · ${asked}× gefragt` : ''}`
 
     const settingRow = (setting: Setting) => (
       <Box key={setting.key} flexDirection="column" paddingLeft={4}>
