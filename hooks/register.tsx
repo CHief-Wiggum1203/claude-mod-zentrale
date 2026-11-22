@@ -491,10 +491,10 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap={1}>
+        <Text dimColor wrap="truncate-end">
+          {list.filter(p => p.isEnabled).length} von {list.length} eingeschaltet
+        </Text>
         <Box flexDirection="row" alignItems="center" gap={1}>
-          <Text dimColor wrap="truncate-end">
-            {list.filter(p => p.isEnabled).length} von {list.length} eingeschaltet
-          </Text>
           <Button key="refresh" label="Liste neu laden" variant="secondary" onPress={() => reload($)} />
           <Button
             key="check-updates"
