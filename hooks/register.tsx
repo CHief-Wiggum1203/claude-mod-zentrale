@@ -26,6 +26,15 @@ const DEFAULT_ADVISOR = 'opus'
 
 const firstLine = (text: string) => text.trim().split('\n')[0] || 'unbekannter Fehler'
 
+/** The line of a failed run that says why: one naming a failure, past the progress text. */
+function reasonOf(text: string) {
+  const lines = text
+    .split('\n')
+    .map(line => line.replace(/^Updating marketplaces?\.\.\.\s*/, '').trim())
+    .filter(line => line !== '')
+  return lines.find(line => /✘|✖|fail|error|fehl/i.test(line)) ?? lines[lines.length - 1] ?? 'unbekannter Fehler'
+}
+
 /** Runs the Claude Code this session runs, so the list matches what loads here. */
 async function cli($: EngineInterface, args: string[], timeoutMs = 30_000) {
   const binary = (await $.env.get('CLAUDE_CODE_EXECPATH')) ?? 'claude'
@@ -137,13 +146,16 @@ async function refresh($: EngineInterface) {
 async function checkUpdates($: EngineInterface) {
   if (await read($, isChecking)) return
   await update($, isChecking, () => true)
+  await update($, error, () => null)
   const fetched = await cli($, ['marketplace', 'update'], 120_000)
   const places = await cli($, ['marketplace', 'list', '--json'])
-  if (!fetched.isOk || !places.isOk) {
-    await update($, error, () => `Update-Suche ging nicht: ${firstLine(fetched.isOk ? places.out : fetched.out)}`)
+  if (!places.isOk) {
+    await update($, error, () => `Update-Suche ging nicht: ${reasonOf(places.out)}`)
     await update($, isChecking, () => false)
     return
   }
+  // One marketplace out of reach leaves the others' catalogs to compare with.
+  if (!fetched.isOk) await update($, error, () => `Nicht jeder Marketplace ließ sich abfragen: ${reasonOf(fetched.out)}`)
   let markets: Record<string, unknown>[] = []
   try {
     markets = JSON.parse(places.out) as Record<string, unknown>[]

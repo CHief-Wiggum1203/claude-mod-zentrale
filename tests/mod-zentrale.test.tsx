@@ -29,7 +29,7 @@ type Fake = {
 }
 
 /** A Claude Code CLI holding these plugins, switching them as asked; returns the commands it ran. */
-function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?: ConfigRow[]; denyConfig?: string; settings?: Record<string, unknown> } = {}) {
+function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?: ConfigRow[]; denyConfig?: string; settings?: Record<string, unknown>; failMarketUpdate?: string } = {}) {
   const ran: string[] = []
   const toasts: string[] = []
   on('env.get', () => ({ value: '/app/claude' }))
@@ -98,6 +98,9 @@ function fakeCli(on: On, plugins: Fake[], opts: { failEnable?: boolean; config?:
           })),
         ),
       )
+    }
+    if (args.join(' ') === 'marketplace update' && opts.failMarketUpdate !== undefined) {
+      return { value: { exitCode: 1, stdout: opts.failMarketUpdate, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (args.join(' ') === 'marketplace update') return ok('')
     if (args.join(' ') === 'marketplace list --json') {
@@ -228,6 +231,23 @@ test('newer versions on offer show per plugin, and one press brings them in', as
   expect(await ui.find({ type: 'Text', text: /Updates? verfügbar/ })).toBeUndefined()
   expect((await ui.find({ type: 'Text', text: /agent-monitor/ }))?.text).toBe('agent-monitor 0.10.0 · claude-agent-monitor')
   expect((await ui.findAll({ type: 'Text', text: /aktualisiert · gilt/ })).length).toBe(2)
+  await ui.unmount()
+})
+
+test('a marketplace that cannot be fetched is named, and the others are still compared', async ($, on) => {
+  const plugins: Fake[] = [
+    { id: 'agent-monitor@claude-agent-monitor', enabled: true, isMod: true, version: '0.4.0', offered: { version: '0.6.0', in: 'manifest' } },
+  ]
+  fakeCli(on, plugins, {
+    failMarketUpdate: 'Updating marketplaces...✘ Failed to update marketplace claude-plugins-official: could not lock\n✔ Updated 5 of 6 marketplaces\n',
+  })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'check-updates' })
+  expect((await ui.find({ type: 'Text', text: /Marketplace/ }))?.text).toBe(
+    'Nicht jeder Marketplace ließ sich abfragen: ✘ Failed to update marketplace claude-plugins-official: could not lock',
+  )
+  expect((await ui.find({ type: 'Text', text: /↑/ }))?.text).toBe('↑ 0.6.0 verfügbar')
   await ui.unmount()
 })
 
